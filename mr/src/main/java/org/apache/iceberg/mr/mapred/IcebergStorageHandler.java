@@ -35,6 +35,7 @@ import org.apache.hadoop.hive.serde2.Deserializer;
 import org.apache.hadoop.mapred.InputFormat;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.OutputFormat;
+import org.apache.iceberg.mr.hive.HiveIcebergInputFormat;
 
 public class IcebergStorageHandler implements HiveStoragePredicateHandler, HiveStorageHandler {
 
@@ -42,7 +43,7 @@ public class IcebergStorageHandler implements HiveStoragePredicateHandler, HiveS
 
   @Override
   public Class<? extends InputFormat> getInputFormatClass() {
-    return MapredIcebergInputFormat.class;
+    return HiveIcebergInputFormat.class;
   }
 
   @Override
