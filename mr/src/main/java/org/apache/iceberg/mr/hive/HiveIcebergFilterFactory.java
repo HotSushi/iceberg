@@ -24,25 +24,17 @@ import java.sql.Date;
 import java.sql.Timestamp;
 import java.util.List;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.apache.hadoop.hive.ql.io.sarg.ExpressionTree;
 import org.apache.hadoop.hive.ql.io.sarg.PredicateLeaf;
 import org.apache.hadoop.hive.ql.io.sarg.SearchArgument;
-import org.apache.hadoop.hive.ql.io.sarg.SearchArgumentImpl;
 import org.apache.hadoop.hive.serde2.io.HiveDecimalWritable;
 import org.apache.iceberg.common.DynFields;
 import org.apache.iceberg.expressions.Expression;
 import org.apache.iceberg.expressions.Expressions;
 import org.apache.iceberg.util.DateTimeUtil;
 
-import static org.apache.iceberg.expressions.Expressions.and;
-import static org.apache.iceberg.expressions.Expressions.equal;
-import static org.apache.iceberg.expressions.Expressions.greaterThanOrEqual;
-import static org.apache.iceberg.expressions.Expressions.in;
-import static org.apache.iceberg.expressions.Expressions.isNull;
-import static org.apache.iceberg.expressions.Expressions.lessThan;
-import static org.apache.iceberg.expressions.Expressions.lessThanOrEqual;
-import static org.apache.iceberg.expressions.Expressions.not;
-import static org.apache.iceberg.expressions.Expressions.or;
+import static org.apache.iceberg.expressions.Expressions.*;
 
 
 public class HiveIcebergFilterFactory {
@@ -115,8 +107,12 @@ public class HiveIcebergFilterFactory {
 
   // PredicateLeafImpl has a work-around for Kryo serialization with java.util.Date objects where it converts values to
   // Timestamp using Date#getTime. This conversion discards microseconds, so this is a necessary to avoid it.
-  private static final DynFields.UnboundField<?> LITERAL_FIELD = DynFields.builder()
-      .hiddenImpl(SearchArgumentImpl.PredicateLeafImpl.class, "literal")
+  private static DynFields.UnboundField<?> LITERAL_FIELD = DynFields.builder()
+      .hiddenImpl(getSearchArgumentImplClass(), "literal")
+      .build();
+
+  private static DynFields.UnboundField<?> LITERAL_LIST_FIELD = DynFields.builder()
+      .hiddenImpl(getSearchArgumentImplClass(), "literalList")
       .build();
 
   private static Object leafToLiteral(PredicateLeaf leaf) {
@@ -125,13 +121,13 @@ public class HiveIcebergFilterFactory {
       case BOOLEAN:
       case STRING:
       case FLOAT:
-        return leaf.getLiteral();
+        return LITERAL_FIELD.get(leaf);
       case DATE:
-        return daysFromTimestamp((Timestamp) leaf.getLiteral());
+        return daysFromTimestamp(new Timestamp(((java.util.Date)LITERAL_FIELD.get(leaf)).getTime()));
       case TIMESTAMP:
         return microsFromTimestamp((Timestamp) LITERAL_FIELD.get(leaf));
       case DECIMAL:
-        return hiveDecimalToBigDecimal((HiveDecimalWritable) leaf.getLiteral());
+        return hiveDecimalToBigDecimal((HiveDecimalWritable) LITERAL_FIELD.get(leaf));
 
       default:
         throw new UnsupportedOperationException("Unknown type: " + leaf.getType());
@@ -144,18 +140,18 @@ public class HiveIcebergFilterFactory {
       case BOOLEAN:
       case FLOAT:
       case STRING:
-        return leaf.getLiteralList();
+        return (List<Object>) LITERAL_LIST_FIELD.get(leaf);
       case DATE:
-        return leaf.getLiteralList().stream().map(value -> daysFromDate((Date) value))
-                .collect(Collectors.toList());
+        return ((List<Object>) LITERAL_LIST_FIELD.get(leaf)).stream().map(value -> daysFromDate((Date) value))
+            .collect(Collectors.toList());
       case DECIMAL:
-        return leaf.getLiteralList().stream()
-                .map(value -> hiveDecimalToBigDecimal((HiveDecimalWritable) value))
-                .collect(Collectors.toList());
+        return ((List<Object>) LITERAL_LIST_FIELD.get(leaf)).stream()
+            .map(value -> hiveDecimalToBigDecimal((HiveDecimalWritable) value))
+            .collect(Collectors.toList());
       case TIMESTAMP:
-        return leaf.getLiteralList().stream()
-                .map(value -> microsFromTimestamp((Timestamp) value))
-                .collect(Collectors.toList());
+        return ((List<Object>) LITERAL_LIST_FIELD.get(leaf)).stream()
+            .map(value -> microsFromTimestamp((Timestamp) value))
+            .collect(Collectors.toList());
       default:
         throw new UnsupportedOperationException("Unknown type: " + leaf.getType());
     }
@@ -176,4 +172,20 @@ public class HiveIcebergFilterFactory {
   private static long microsFromTimestamp(Timestamp timestamp) {
     return DateTimeUtil.microsFromInstant(timestamp.toInstant());
   }
+
+  private static Class getSearchArgumentImplClass() {
+    Class<?>  PREDICATE_LEAF_IMPL;
+    try {
+      // SearchArgumentImpl is a package-private class in Hive 1.1, but not in Hive > 2
+      PREDICATE_LEAF_IMPL = Stream.of(
+          Class.forName("org.apache.hadoop.hive.ql.io.sarg.SearchArgumentImpl").getDeclaredClasses())
+          .filter(subClass -> "PredicateLeafImpl".equals(subClass.getSimpleName()))
+          .findFirst()
+          .orElse(null);
+    } catch (ClassNotFoundException e) {
+      throw new RuntimeException(e);
+    }
+    return PREDICATE_LEAF_IMPL;
+  }
+
 }
